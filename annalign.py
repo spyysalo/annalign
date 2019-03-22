@@ -1,0 +1,610 @@
+#!/usr/bin/env python3
+
+import sys
+import os
+import logging
+
+import diff_match_patch as dmp_module
+
+
+logging.basicConfig()
+logger = logging.getLogger(__file__)
+info, warning, error = logger.info, logger.warning, logger.error
+
+
+dmp = dmp_module.diff_match_patch()
+
+DEL, EQ, INS, OP, TXT = -1, 0, 1, 0, 1   # diff-match-patch constants
+
+DEFAULT_ENCODING = 'utf-8'
+
+
+def argparser():
+    from argparse import ArgumentParser
+    ap = ArgumentParser()
+    ap.add_argument('-e', '--encoding', default=DEFAULT_ENCODING,
+                    help='text encoding (default {})'.format(DEFAULT_ENCODING))
+    ap.add_argument('-v', '--verbose', default=False, action='store_true',
+                    help='verbose output')
+    ap.add_argument('ann', metavar='ANN', help='annotation file')
+    ap.add_argument('oldtext', metavar='TEXT', help='annotated text')
+    ap.add_argument('newtext', metavar='TEXT', help='text to align to')
+    return ap
+
+
+########## annotation ##########
+
+
+class FormatError(Exception):
+    pass
+
+
+class SpanDeleted(Exception):
+    pass
+
+
+class Annotation(object):
+    def __init__(self, id_, type_):
+        self.id_ = id_
+        self.type_ = type_
+
+    def remap(self, _):
+        # assume not text-bound: no-op
+        return None
+
+    def fragment(self, _):
+        # assume not text-bound: no-op
+        return None
+
+    def retext(self, _):
+        # assume not text-bound: no-op
+        return None
+
+
+def escape_tb_text(s):
+    return s.replace('\n', '\\n')
+
+
+def is_newline(c):
+    # from http://stackoverflow.com/a/18325046
+    return c in (
+        '\u000A',    # LINE FEED
+        '\u000B',    # VERTICAL TABULATION
+        '\u000C',    # FORM FEED
+        '\u000D',    # CARRIAGE RETURN
+        '\u001C',    # FILE SEPARATOR
+        '\u001D',    # GROUP SEPARATOR
+        '\u001E',    # RECORD SEPARATOR
+        '\u0085',    # NEXT LINE
+        '\u2028',    # LINE SEPARATOR
+        '\u2029'     # PARAGRAPH SEPARATOR
+    )
+
+
+class Textbound(Annotation):
+    def __init__(self, id_, type_, offsets, text):
+        Annotation.__init__(self, id_, type_)
+        self.text = text
+
+        self.offsets = []
+        if ';' in offsets:
+            # not tested w/discont, so better not to try
+            raise NotImplementedError(
+                'Discontinuous annotations not supported')
+        assert len(offsets) == 2, "Data format error"
+        self.offsets.append((int(offsets[0]), int(offsets[1])))
+
+    def remap(self, mapper):
+        remapped = []
+        for start, end in self.offsets:
+            try:
+                remapped.append(mapper.remap(start, end))
+            except SpanDeleted as e:
+                warning('span deleted: {}'.format(e))
+        if not remapped:
+            raise(SpanDeleted(str(self.offsets)))    # all spans deleted
+        self.offsets = remapped
+
+    def fragment(self, text):
+        # Remapping may create spans that extend over newlines, which
+        # brat doesn't handle well. Break any such span into multiple
+        # fragments that skip newlines.
+        fragmented = []
+        for start, end in self.offsets:
+            while start < end:
+                while start < end and is_newline(text[start]):
+                    start += 1  # skip initial newlines
+                fend = start
+                while fend < end and not is_newline(text[fend]):
+                    fend += 1  # find max sequence of non-newlines
+                if fend > start:
+                    fragmented.append((start, fend))
+                start = fend
+
+        # Switch to fragmented. Edge case: if offsets now only span
+        # newlines, replace them with a single zero-length span at
+        # the start of the first original span.
+        if fragmented:
+            self.offsets = fragmented
+        else:
+            warning('replacing fragmented annotation with zero-width span')
+            self.offsets = [(self.offsets[0][0], self.offsets[0][0])]
+
+    def retext(self, text):
+        old_text = self.text
+        self.text = ' '.join(text[o[0]:o[1]] for o in self.offsets)
+        if any(is_newline(c) for c in self.text):
+            warning('newline in text: %s' % self.text, file=sys.stderr)
+        if self.text != old_text:
+            warning('retext: change "{}" to "{}"'.format(old_text, self.text))
+
+    def __unicode__(self):
+        return "%s\t%s %s\t%s" % (self.id_, self.type_,
+                                   ';'.join(['%d %d' % (s, e)
+                                             for s, e in self.offsets]),
+                                   escape_tb_text(self.text))
+
+    def __str__(self):
+        return "%s\t%s %s\t%s" % (self.id_, self.type_,
+                                  ';'.join(['%d %d' % (s, e)
+                                            for s, e in self.offsets]),
+                                  escape_tb_text(self.text))
+
+
+class XMLElement(Textbound):
+    def __init__(self, id_, type_, offsets, text, attributes):
+        Textbound.__init__(self, id_, type_, offsets, text)
+        self.attributes = attributes
+
+    def __str__(self):
+        return "%s\t%s %s\t%s\t%s" % (self.id_, self.type_,
+                                      ';'.join(['%d %d' % (s, e)
+                                                for s, e in self.offsets]),
+                                      escape_tb_text(self.text),
+                                      self.attributes)
+
+
+class ArgAnnotation(Annotation):
+    def __init__(self, id_, type_, args):
+        Annotation.__init__(self, id_, type_)
+        self.args = args
+
+
+class Relation(ArgAnnotation):
+    def __init__(self, id_, type_, args):
+        ArgAnnotation.__init__(self, id_, type_, args)
+
+    def __str__(self):
+        return "%s\t%s %s" % (self.id_, self.type_, ' '.join(self.args))
+
+
+class Event(ArgAnnotation):
+    def __init__(self, id_, type_, trigger, args):
+        ArgAnnotation.__init__(self, id_, type_, args)
+        self.trigger = trigger
+
+    def __str__(self):
+        return "%s\t%s:%s %s" % (self.id_, self.type_, self.trigger,
+                                 ' '.join(self.args))
+
+
+class Attribute(Annotation):
+    def __init__(self, id_, type_, target, value):
+        Annotation.__init__(self, id_, type_)
+        self.target = target
+        self.value = value
+
+    def __str__(self):
+        return "%s\t%s %s%s" % (self.id_, self.type_, self.target,
+                                '' if self.value is None else ' ' + self.value)
+
+
+class Normalization(Annotation):
+    def __init__(self, id_, type_, target, ref, reftext):
+        Annotation.__init__(self, id_, type_)
+        self.target = target
+        self.ref = ref
+        self.reftext = reftext
+
+    def __str__(self):
+        return "%s\t%s %s %s\t%s" % (self.id_, self.type_, self.target,
+                                     self.ref, self.reftext)
+
+
+class Equiv(Annotation):
+    def __init__(self, id_, type_, targets):
+        Annotation.__init__(self, id_, type_)
+        self.targets = targets
+
+    def __str__(self):
+        return "%s\t%s %s" % (self.id_, self.type_, ' '.join(self.targets))
+
+
+class Note(Annotation):
+    def __init__(self, id_, type_, target, text):
+        Annotation.__init__(self, id_, type_)
+        self.target = target
+        self.text = text
+
+    def __str__(self):
+        return "%s\t%s %s\t%s" % (self.id_, self.type_, self.target, self.text)
+
+
+def parse_xml(fields):
+    id_, type_offsets, text, attributes = fields
+    type_offsets = type_offsets.split(' ')
+    type_, offsets = type_offsets[0], type_offsets[1:]
+    return XMLElement(id_, type_, offsets, text, attributes)
+
+
+def parse_textbound(fields):
+    id_, type_offsets, text = fields
+    type_offsets = type_offsets.split(' ')
+    type_, offsets = type_offsets[0], type_offsets[1:]
+    return Textbound(id_, type_, offsets, text)
+
+
+def parse_relation(fields):
+    # allow a variant where the two initial TAB-separated fields are
+    # followed by an extra tab
+    if len(fields) == 3 and not fields[2]:
+        fields = fields[:2]
+    id_, type_args = fields
+    type_args = type_args.split(' ')
+    type_, args = type_args[0], type_args[1:]
+    return Relation(id_, type_, args)
+
+
+def parse_event(fields):
+    id_, type_trigger_args = fields
+    type_trigger_args = type_trigger_args.split(' ')
+    type_trigger, args = type_trigger_args[0], type_trigger_args[1:]
+    type_, trigger = type_trigger.split(':')
+    return Event(id_, type_, trigger, args)
+
+
+def parse_attribute(fields):
+    id_, type_target_value = fields
+    type_target_value = type_target_value.split(' ')
+    if len(type_target_value) == 3:
+        type_, target, value = type_target_value
+    else:
+        type_, target = type_target_value
+        value = None
+    return Attribute(id_, type_, target, value)
+
+
+def parse_normalization(fields):
+    id_, type_target_ref, reftext = fields
+    type_, target, ref = type_target_ref.split(' ')
+    return Normalization(id_, type_, target, ref, reftext)
+
+
+def parse_note(fields):
+    id_, type_target, text = fields
+    type_, target = type_target.split(' ')
+    return Note(id_, type_, target, text)
+
+
+def parse_equiv(fields):
+    id_, type_targets = fields
+    type_targets = type_targets.split(' ')
+    type_, targets = type_targets[0], type_targets[1:]
+    return Equiv(id_, type_, targets)
+
+
+parse_standoff_func = {
+    'T': parse_textbound,
+    'R': parse_relation,
+    'E': parse_event,
+    'N': parse_normalization,
+    'M': parse_attribute,
+    'A': parse_attribute,
+    'X': parse_xml,
+    '#': parse_note,
+    '*': parse_equiv,
+}
+
+
+def parse_standoff_line(l, ln, fn):
+    try:
+        return parse_standoff_func[l[0]](l.split('\t'))
+    except Exception:
+        raise FormatError("error on line {} in {}: {}".format(ln, fn, l))
+
+
+def parse_ann_file(fn, options):
+    annotations = []
+    with open(fn, 'r', encoding=options.encoding) as f:
+        for ln, l in enumerate(f, start=1):
+            l = l.rstrip('\n')
+            annotations.append(parse_standoff_line(l, ln, fn))
+    return annotations
+
+
+class Remapper(object):
+    def __init__(self, offset_map):
+        self.offset_map = offset_map
+
+    def remap(self, start, end):
+        if start == end:
+            return self.offset_map[start], self.offset_map[end]    # empty span
+        elif self.offset_map[start] == self.offset_map[end]:
+            # non-empty span maps to empty
+            raise SpanDeleted('{}:{} -> {}:{}'.format(
+                start, end, self.offset_map[start], self.offset_map[end]))
+        else:
+            return self.offset_map[start], self.offset_map[end - 1] + 1
+
+
+########## diff ##########
+
+
+def alignment_strings(diff):
+    a1, a2 = [], []
+    for op, s in diff:
+        if op == EQ:
+            a1.append(s)
+            a2.append(s)
+        elif op == DEL:
+            a1.append(s)
+            a2.append('-'*len(s))
+        elif op == INS:
+            a1.append('-'*len(s))
+            a2.append(s)
+    return ''.join(a1), ''.join(a2)
+
+
+def diff_to_offset_map(diff):
+    o, ins_count, del_count, offset_map = 0, 0, 0, []
+    for op, s in diff:
+        if op == EQ:
+            # resolve possible previous deletes and inserts
+            sub_count = min(ins_count, del_count)
+            # in substitutions, arbitrarily match initial characters
+            for i in range(sub_count):
+                offset_map.append(o)
+                o += 1
+            ins_count -= sub_count
+            del_count -= sub_count
+            if del_count:
+                # deletion: next characters all map to the same offset
+                for i in range(del_count):
+                    offset_map.append(o)
+                del_count = 0
+            if ins_count:
+                # insertion: update offset
+                o += ins_count
+                ins_count = 0
+            for i in range(len(s)):
+                offset_map.append(o+i)
+            o += len(s)
+        elif op == DEL:
+            del_count += len(s)
+        elif op == INS:
+            ins_count += len(s)
+    # resolve leftovers
+    sub_count = min(ins_count, del_count)
+    for i in range(sub_count):
+        # trailing substitution: arbitrarily match initial characters
+        offset_map.append(o)
+        o += 1
+    ins_count -= sub_count
+    del_count -= sub_count
+    if del_count > 0:
+        # trailing delete: remaining text maps to last offset
+        for i in range(del_count):
+            offset_map.append(o)
+    return offset_map
+
+
+def words_to_chars(words, word_list, word_hash):
+    # Adapted from diff_match_patch.py diff_linesToCharsMunge()
+    # "\x00" is a valid character, but various debuggers don't like it.
+    # So we'll insert a junk entry to avoid generating a null character.
+    if not(word_list):
+        word_list.append('')
+    chars = []
+    for word in words:
+        if word not in word_hash:
+            if len(word_list) >= sys.maxunicode:
+                raise ValueError('too many unique words')
+            word_hash[word] = len(word_list)
+            word_list.append(word)
+        chars.append(chr(word_hash[word]))
+    return ''.join(chars)
+
+
+def word_diff(words1, words2):
+    # Adapted from diff_match_patch.py diff_linesToChars/charsToLines()
+    word_list, word_hash = [], {}
+    
+    # replace each word with a unicode character
+    chars1 = words_to_chars(words1, word_list, word_hash)
+    chars2 = words_to_chars(words2, word_list, word_hash)
+
+    # take a word-level diff
+    diff = dmp.diff_main(chars1, chars2, checklines=False)
+
+    # replace chars back with words
+    for i in range(len(diff)):
+        text = []
+        for char in diff[i][1]:
+            text.append(word_list[ord(char)])
+        diff[i] = (diff[i][OP], ''.join(text))
+
+    return diff
+
+
+def re_diff(diff):
+    # Adapted from diff_match_patch.py diff_lineMode()
+    # Re-diff word (or sentence) level substitutions on character level
+    diff.append((EQ, ''))    # add sentinel
+    del_count, ins_count = 0, 0
+    del_text, ins_text = '', ''
+    i = 0
+    while i < len(diff):
+        if diff[i][0] == INS:
+            ins_count += 1
+            ins_text += diff[i][TXT]
+        elif diff[i][0] == DEL:
+            del_count += 1
+            del_text += diff[i][TXT]
+        elif diff[i][0] == EQ:
+            # check for substitutions (delete and insert)
+            if del_count >= 1 and ins_count >= 1:
+                # delete substitution, add char-level diff
+                sub_diff = dmp.diff_main(del_text, ins_text, False)
+                diff[i-(del_count+ins_count):i] = sub_diff
+                i += len(sub_diff) - (del_count + ins_count)
+            del_count, ins_count = 0, 0
+            del_text, ins_text = '', ''
+        i += 1
+    diff.pop()    # drop sentinel
+    return diff
+
+
+def has_initial_space(s, pos=0):
+    return pos < len(s) and s[pos].isspace()
+
+
+def initial_space_count(s, start=0):
+    """Return number of initial spaces in s."""
+    i, end = 0, len(s)
+    while start+i < end and s[start+i].isspace():
+        i += 1
+    return i
+
+
+def find_end_ignorespace(s, sub, start=0):
+    """Find end of substring sub in s, ignoring extra space in s."""
+    i, j = 0, 0
+    while j < len(sub):
+        if s[start+i] == sub[j]:
+            i += 1
+            j += 1
+        elif s[start+i].isspace():
+            i += 1
+        else:
+            raise ValueError('cannot find substring "{}" in "{}"'.\
+                             format(sub, s[start:]))
+    # TODO skip trailing space too?
+    return start+i
+
+
+def diff_ignorespace(text1, text2):
+    # Note: tokenization that splits punctuation (etc.) might produce
+    # better diffs than whitespace splitting in some cases.
+    words1 = text1.split()
+    words2 = text2.split()
+
+    # start with word-level diff
+    diff = word_diff(words1, words2)
+
+    # TODO: consider calling dmp.diff_cleanupSemantic(diff) here
+
+    # extend to character level
+    diff = re_diff(diff)
+
+    # helper, avoids code duplication
+    def _resolve_initial_space(text1, text2, o1, o2, diff, i=None):
+        if i is None:
+            i = len(diff)    # append
+        s1 = initial_space_count(text1, o1)
+        s2 = initial_space_count(text2, o2)
+        if s1 and s2:
+            # space in both, add EQ spanning as much as possible
+            sb = min(s1, s2)
+            diff.insert(i, (EQ, text1[o1:o1+sb]))
+            o1 += sb
+            o2 += sb
+        elif s1:
+            # space only in text1, add DEL removing it
+            diff.insert(i, (DEL, text1[o1:o1+s1]))
+            o1 += s1
+        elif s2:
+            # space only in text2, add INS adding it
+            diff.insert(i, (INS, text2[o2:o2+s2]))
+            o2 += s2
+        return o1, o2, diff
+
+    # Put space back in. Note that this doesn't make a diff for space:
+    # space substitutions such as ' ' for '\t' are ignored.    
+    o1, o2, i = 0, 0, 0
+    while i < len(diff):
+        if has_initial_space(text1, o1) or has_initial_space(text2, o2):
+            o1, o2, diff = _resolve_initial_space(text1, text2, o1, o2, diff, i)
+        else:
+            # no initial space, process diff and put space back in
+            if diff[i][OP] == EQ:
+                e1 = find_end_ignorespace(text1, diff[i][TXT], o1)
+                e2 = find_end_ignorespace(text2, diff[i][TXT], o2)
+                sub_diff = dmp.diff_main(text1[o1:e1], text2[o2:e2])
+                diff[i:i+1]= sub_diff
+                i += len(sub_diff)-1
+                o1 = e1
+                o2 = e2
+            elif diff[i][OP] == DEL:
+                e1 = find_end_ignorespace(text1, diff[i][TXT], o1)
+                diff[i] = (diff[i][OP], text1[o1:e1])
+                o1 = e1
+            else:
+                e2 = find_end_ignorespace(text2, diff[i][TXT], o2)
+                diff[i] = (diff[i][OP], text2[o2:e2])
+                o2 = e2
+        i += 1
+
+    # handle space at end
+    while has_initial_space(text1, o1) or has_initial_space(text2, o2):
+        o1, o2, diff = _resolve_initial_space(text1, text2, o1, o2, diff)
+
+    return diff
+
+
+def align_files(ann_file, old_file, new_file, options):
+    annotations = parse_ann_file(ann_file, options)
+    
+    with open(old_file, encoding=options.encoding) as f:
+        old_text = f.read()
+    with open(new_file, encoding=options.encoding) as f:
+        new_text = f.read()
+
+    diff = diff_ignorespace(old_text, new_text)
+
+    # verbose diagnostic output
+    distance = dmp.diff_levenshtein(diff)
+    info('{} <> {} distance {} (lengts {}, {})'.format(
+        old_file, new_file, distance, len(old_text), len(new_text)))
+    for a in alignment_strings(diff):
+        info('alignment:\n{}'.format(a))
+
+    offset_map = diff_to_offset_map(diff)
+    assert len(offset_map) == len(old_text), 'internal error: {} {}'.format(len(offset_map), len(old_text))
+    
+    for a in annotations:
+        try:
+            a.remap(Remapper(offset_map))
+        except SpanDeleted:
+            warning('annotation deleted from {}: {}'.format(ann_file, a))
+            continue
+        a.fragment(new_text)
+        a.retext(new_text)
+        print(str(a))    # TODO encoding
+
+    return 0
+        
+def main(argv):
+    args = argparser().parse_args(argv[1:])
+    if args.verbose:
+        logger.setLevel(logging.INFO)
+    try:
+        align_files(args.ann, args.oldtext, args.newtext, args)
+    except Exception as e:
+        error('failed {} {} {} {}'.format(
+            __file__, args.ann, args.oldtext, args.newtext))
+        raise
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))

@@ -1,0 +1,82 @@
+T1	Chemical 23 25	Na
+N1	Reference T1 MESH:D012964	Na
+T2	Chemical 29 33	K(+)
+N2	Reference T2 MESH:D011188	K(+)
+T3	Chemical 34 39	Cl(-)
+T4	Gene 40 111	Cotransporter 1 and Cystic Fibrosis Transmembrane Conductance Regulator
+N3	Reference T4 NCBIGENE:1080	Cotransporter 1 and Cystic Fibrosis Transmembrane Conductance Regulator
+T5	Disease 60 66	Cystic
+N4	Reference T5 MESH:D052177	Cystic
+T6	Disease 130 152	Pulmonary Inflammation
+N5	Reference T6 MESH:D011014	Pulmonary Inflammation
+T7	Disease 157 162	Edema
+N6	Reference T7 MESH:D004487	Edema
+T8	Disease 174 189	Pulmonary edema
+N7	Reference T8 MESH:D011654	Pulmonary edema
+T9	Disease 215 226	lung injury
+N8	Reference T9 MESH:D055370	lung injury
+T10	Disease 231 243	inflammation
+N9	Reference T10 MESH:D007249	inflammation
+T11	Disease 452 477	excess fluid accumulation
+N10	Reference T11 MESH:D008107	excess fluid accumulation
+T12	Chemical 512 518	sodium
+N11	Reference T12 MESH:D012964	sodium
+T13	Chemical 533 538	Cl(-)
+T14	Disease 605 610	edema
+N12	Reference T14 MESH:D004487	edema
+T15	Disease 614 645	increased vascular permeability
+N13	Reference T15 MESH:D014652	increased vascular permeability
+T16	Disease 673 686	lung diseases
+N14	Reference T16 MESH:D008171	lung diseases
+T17	Disease 699 734	acute respiratory distress syndrome
+N15	Reference T17 MESH:D012128	acute respiratory distress syndrome
+T18	Disease 736 740	ARDS
+N16	Reference T18 MESH:D012128	ARDS
+T19	Disease 825 840	pulmonary edema
+N17	Reference T19 MESH:D011654	pulmonary edema
+T20	Gene 868 901	Na(+)-K(+)-2Cl(-) cotransporter 1
+N18	Reference T20 NCBIGENE:6558	Na(+)-K(+)-2Cl(-) cotransporter 1
+T21	Chemical 868 873	Na(+)
+N19	Reference T21 MESH:D012964	Na(+)
+T22	Chemical 874 875	K
+N20	Reference T22 MESH:D011188	K
+T23	Chemical 880 882	Cl
+T24	Gene 903 908	NKCC1
+N21	Reference T24 NCBIGENE:6558	NKCC1
+T25	Chemical 925 930	Cl(-)
+T26	Gene 939 990	cystic fibrosis transmembrane conductance regulator
+N22	Reference T26 NCBIGENE:1080	cystic fibrosis transmembrane conductance regulator
+T27	Gene 992 996	CFTR
+N23	Reference T27 NCBIGENE:1080	CFTR
+T28	Disease 1062 1077	pulmonary edema
+N24	Reference T28 MESH:D011654	pulmonary edema
+T29	Disease 1140 1144	ARDS
+N25	Reference T29 MESH:D012128	ARDS
+T30	Gene 1178 1183	NKCC1
+N26	Reference T30 NCBIGENE:6558	NKCC1
+T31	Gene 1188 1192	CFTR
+N27	Reference T31 NCBIGENE:1080	CFTR
+T32	Disease 1293 1297	ARDS
+N28	Reference T32 MESH:D012128	ARDS
+T33	Disease 1302 1317	pulmonary edema
+N29	Reference T33 MESH:D011654	pulmonary edema
+T34	Gene 1398 1403	NKCC1
+N30	Reference T34 NCBIGENE:6558	NKCC1
+T35	Gene 1408 1412	CFTR
+N31	Reference T35 NCBIGENE:1080	CFTR
+T36	Gene 1465 1470	NKCC1
+N32	Reference T36 NCBIGENE:6558	NKCC1
+T37	Gene 1475 1479	CFTR
+N33	Reference T37 NCBIGENE:1080	CFTR
+T38	Disease 1488 1493	edema
+N34	Reference T38 MESH:D004487	edema
+T39	Disease 1498 1510	inflammation
+N35	Reference T39 MESH:D007249	inflammation
+T40	Gene 1555 1560	NKCC1
+N36	Reference T40 NCBIGENE:6558	NKCC1
+T41	Gene 1561 1565	CFTR
+N37	Reference T41 NCBIGENE:1080	CFTR
+T42	Disease 1625 1647	pulmonary inflammation
+N38	Reference T42 MESH:D011014	pulmonary inflammation
+T43	Disease 1652 1657	edema
+N39	Reference T43 MESH:D004487	edema
