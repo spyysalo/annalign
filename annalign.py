@@ -325,16 +325,16 @@ def parse_ann_file(fn, options):
 
 def is_word_start(offset, text):
     if offset == 0:
-        return not text[offset].isspace()
+        return text[offset].isalnum()
     else:
-        return text[offset-1].isspace() and not text[offset].isspace()
+        return text[offset].isalnum() and not text[offset-1].isalnum()
 
 
 def is_word_end(offset, text):
-    if offset == 0:
+    if offset == 0 or not text[offset-1].isalnum():
         return False
     else:
-        return (not text[offset-1].isspace()) and text[offset].isspace()
+        return offset >= len(text) or not text[offset].isalnum()
 
 
 class Remapper(object):
@@ -358,35 +358,33 @@ class Remapper(object):
         if not max_realign_distance:
             return new_start, new_end
 
-        # if span started/ended at word boundary before, try to realign
+        # if span started/ended at word boundary before, try to
+        # re-identify the boundary by extending the span.
+        # TODO: consider checking if chars before/after span match
         old_text, new_text = self.old_text, self.new_text
+        old_span_text = old_text[start:end]
         re_start = None
         if is_word_start(start, old_text):
             for i in range(max_realign_distance):
                 if new_start-i >= 0 and is_word_start(new_start-i, new_text):
                     re_start = new_start - i
                     break
-                if new_start+i < new_end and is_word_start(new_start+i,
-                                                           new_text):
-                    re_start = new_start + i
-                    break
         if re_start is not None and re_start != new_start:
-            warning('realign: "{}" to "{}"'.format(
-                new_text[new_start:new_end], new_text[re_start:new_end]))
+            warning('realign: "{}" to "{}" (original "{}")'.format(
+                new_text[new_start:new_end], new_text[re_start:new_end],
+                old_span_text))
             new_start = re_start
         re_end = None
         if is_word_end(end, self.old_text):
             for i in range(max_realign_distance):
-                if new_end-i > new_start and is_word_end(new_end-i, new_text):
-                    re_end = new_end - i
-                    break
-                if new_end+1 <= len(new_text) and is_word_end(new_end+i,
-                                                              new_text):
+                if new_end+i < len(new_text) and is_word_end(new_end+i,
+                                                             new_text):
                     re_end = new_end + i
                     break
         if re_end is not None and re_end != new_end:
-            warning('realign: "{}" to "{}"'.format(
-                new_text[new_start:new_end], new_text[new_start:re_end]))
+            warning('realign: "{}" to "{}" (original "{}")'.format(
+                new_text[new_start:new_end], new_text[new_start:re_end],
+                old_span_text))
             new_end = re_end
         return new_start, new_end
 
