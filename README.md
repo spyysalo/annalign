@@ -35,4 +35,4 @@ the same text.
 Derived in part from brat
 [annalign.py](https://github.com/nlplab/brat/blob/master/tools/annalign.py)
 and in part from
-[https://github.com/google/diff-match-patch](diff-match-patch).
+[diff-match-patch](https://github.com/google/diff-match-patch).
