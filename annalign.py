@@ -131,12 +131,13 @@ class Textbound(Annotation):
             self.offsets = [(self.offsets[0][0], self.offsets[0][0])]
 
     def retext(self, text):
-        old_text = self.text
+        self.orig_text = self.text
         self.text = ' '.join(text[o[0]:o[1]] for o in self.offsets)
         if any(is_newline(c) for c in self.text):
-            warning('newline in text: %s' % self.text, file=sys.stderr)
-        if self.text != old_text:
-            warning('retext: change "{}" to "{}"'.format(old_text, self.text))
+            warning('newline in text: {}'.format(self.text))
+        if self.text != self.orig_text:
+            warning('retext: change "{}" to "{}"'.format(self.orig_text,
+                                                         self.text))
 
     def __unicode__(self):
         return "%s\t%s %s\t%s" % (self.id_, self.type_,
@@ -322,11 +323,27 @@ def parse_ann_file(fn, options):
     return annotations
 
 
+def is_word_start(offset, text):
+    if offset == 0:
+        return not text[offset].isspace()
+    else:
+        return text[offset-1].isspace() and not text[offset].isspace()
+
+
+def is_word_end(offset, text):
+    if offset == 0:
+        return False
+    else:
+        return (not text[offset-1].isspace()) and text[offset].isspace()
+
+
 class Remapper(object):
-    def __init__(self, offset_map):
+    def __init__(self, old_text, new_text, offset_map):
+        self.old_text = old_text
+        self.new_text = new_text
         self.offset_map = offset_map
 
-    def remap(self, start, end):
+    def _remap(self, start, end):
         if start == end:
             return self.offset_map[start], self.offset_map[end]    # empty span
         elif self.offset_map[start] == self.offset_map[end]:
@@ -335,6 +352,43 @@ class Remapper(object):
                 start, end, self.offset_map[start], self.offset_map[end]))
         else:
             return self.offset_map[start], self.offset_map[end - 1] + 1
+
+    def remap(self, start, end, max_realign_distance=10):
+        new_start, new_end = self._remap(start, end)
+        if not max_realign_distance:
+            return new_start, new_end
+
+        # if span started/ended at word boundary before, try to realign
+        old_text, new_text = self.old_text, self.new_text
+        re_start = None
+        if is_word_start(start, old_text):
+            for i in range(max_realign_distance):
+                if new_start-i >= 0 and is_word_start(new_start-i, new_text):
+                    re_start = new_start - i
+                    break
+                if new_start+i < new_end and is_word_start(new_start+i,
+                                                           new_text):
+                    re_start = new_start + i
+                    break
+        if re_start is not None and re_start != new_start:
+            warning('realign: "{}" to "{}"'.format(
+                new_text[new_start:new_end], new_text[re_start:new_end]))
+            new_start = re_start
+        re_end = None
+        if is_word_end(end, self.old_text):
+            for i in range(max_realign_distance):
+                if new_end-i > new_start and is_word_end(new_end-i, new_text):
+                    re_end = new_end - i
+                    break
+                if new_end+1 <= len(new_text) and is_word_end(new_end+i,
+                                                              new_text):
+                    re_end = new_end + i
+                    break
+        if re_end is not None and re_end != new_end:
+            warning('realign: "{}" to "{}"'.format(
+                new_text[new_start:new_end], new_text[new_start:re_end]))
+            new_end = re_end
+        return new_start, new_end
 
 
 ########## diff ##########
@@ -580,10 +634,11 @@ def align_files(ann_file, old_file, new_file, options):
 
     offset_map = diff_to_offset_map(diff)
     assert len(offset_map) == len(old_text), 'internal error: {} {}'.format(len(offset_map), len(old_text))
-    
+
+    mapper = Remapper(old_text, new_text, offset_map)
     for a in annotations:
         try:
-            a.remap(Remapper(offset_map))
+            a.remap(mapper)
         except SpanDeleted:
             warning('annotation deleted from {}: {}'.format(ann_file, a))
             continue
@@ -592,7 +647,8 @@ def align_files(ann_file, old_file, new_file, options):
         print(str(a))    # TODO encoding
 
     return 0
-        
+
+
 def main(argv):
     args = argparser().parse_args(argv[1:])
     if args.verbose:

@@ -2,7 +2,7 @@ T1	Chemical 23 25	Na
 N1	Reference T1 MESH:D012964	Na
 T2	Chemical 27 30	K+-
 N2	Reference T2 MESH:D011188	K(+)
-T3	Chemical 30 34	Cl- 
+T3	Chemical 30 33	Cl-
 T4	Gene 34 105	Cotransporter 1 and Cystic Fibrosis Transmembrane Conductance Regulator
 N3	Reference T4 NCBIGENE:1080	Cotransporter 1 and Cystic Fibrosis Transmembrane Conductance Regulator
 T5	Disease 54 60	Cystic
@@ -21,7 +21,7 @@ T11	Disease 446 471	excess fluid accumulation
 N10	Reference T11 MESH:D008107	excess fluid accumulation
 T12	Chemical 506 512	sodium
 N11	Reference T12 MESH:D012964	sodium
-T13	Chemical 527 531	Cl- 
+T13	Chemical 527 530	Cl-
 T14	Disease 597 602	edema
 N12	Reference T14 MESH:D004487	edema
 T15	Disease 606 637	increased vascular permeability
@@ -43,7 +43,7 @@ N20	Reference T22 MESH:D011188	K
 T23	Chemical 868 870	Cl
 T24	Gene 889 894	NKCC1
 N21	Reference T24 NCBIGENE:6558	NKCC1
-T25	Chemical 911 915	Cl- 
+T25	Chemical 911 914	Cl-
 T26	Gene 923 974	cystic fibrosis transmembrane conductance regulator
 N22	Reference T26 NCBIGENE:1080	cystic fibrosis transmembrane conductance regulator
 T27	Gene 976 980	CFTR
