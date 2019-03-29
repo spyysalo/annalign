@@ -24,9 +24,11 @@ def argparser():
     ap = ArgumentParser()
     ap.add_argument('-e', '--encoding', default=DEFAULT_ENCODING,
                     help='text encoding (default {})'.format(DEFAULT_ENCODING))
+    ap.add_argument('-o', '--output', default=None,
+                    help='aligned annotation (default STDOUT)')
     ap.add_argument('-v', '--verbose', default=False, action='store_true',
                     help='verbose output')
-    ap.add_argument('ann', metavar='ANN', help='annotation file')
+    ap.add_argument('ann', metavar='ANN', help='annotation')
     ap.add_argument('oldtext', metavar='TEXT', help='annotated text')
     ap.add_argument('newtext', metavar='TEXT', help='text to align to')
     return ap
@@ -502,7 +504,7 @@ def words_to_chars(words, word_list, word_hash):
 def word_diff(words1, words2):
     # Adapted from diff_match_patch.py diff_linesToChars/charsToLines()
     word_list, word_hash = [], {}
-    
+
     # replace each word with a unicode character
     chars1 = words_to_chars(words1, word_list, word_hash)
     chars2 = words_to_chars(words2, word_list, word_hash)
@@ -613,7 +615,7 @@ def diff_ignorespace(text1, text2):
         return o1, o2, diff
 
     # Put space back in. Note that this doesn't make a diff for space:
-    # space substitutions such as ' ' for '\t' are ignored.    
+    # space substitutions such as ' ' for '\t' are ignored.
     o1, o2, i = 0, 0, 0
     while i < len(diff):
         if has_initial_space(text1, o1) or has_initial_space(text2, o2):
@@ -645,20 +647,14 @@ def diff_ignorespace(text1, text2):
     return diff
 
 
-def align_files(ann_file, old_file, new_file, options):
-    annotations = parse_ann_file(ann_file, options)
-    
-    with open(old_file, encoding=options.encoding) as f:
-        old_text = f.read()
-    with open(new_file, encoding=options.encoding) as f:
-        new_text = f.read()
-
+def align(annotations, old_text, new_text, ann_name, old_name, new_name,
+          options):
     diff = diff_ignorespace(old_text, new_text)
 
     # verbose diagnostic output
     distance = dmp.diff_levenshtein(diff)
     info('{} <> {} distance {} (lengts {}, {})'.format(
-        old_file, new_file, distance, len(old_text), len(new_text)))
+        old_name, new_name, distance, len(old_text), len(new_text)))
     for a in alignment_strings(diff):
         info('alignment:\n{}'.format(a))
 
@@ -670,13 +666,35 @@ def align_files(ann_file, old_file, new_file, options):
         try:
             a.remap(mapper)
         except SpanDeleted:
-            warning('annotation deleted from {}: {}'.format(ann_file, a))
+            warning('annotation deleted from {}: {}'.format(ann_name, a))
             continue
         a.fragment(new_text)
         a.retext(new_text)
-        print(str(a))    # TODO encoding
 
-    return 0
+    return annotations
+
+
+def write_annotations(annotations, out):
+    for a in annotations:
+        print(str(a), file=out)
+
+
+def align_files(ann_file, old_file, new_file, options):
+    annotations = parse_ann_file(ann_file, options)
+
+    with open(old_file, encoding=options.encoding) as f:
+        old_text = f.read()
+    with open(new_file, encoding=options.encoding) as f:
+        new_text = f.read()
+
+    annotations = align(annotations, old_text, new_text,
+                        ann_file, old_file, new_file, options)
+
+    if options.output is None:
+        write_annotations(annotations, sys.stdout)
+    else:
+        with open(options.output, 'wt', encoding=options.encoding) as out:
+            write_annotations(annotations, out)
 
 
 def main(argv):
