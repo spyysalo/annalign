@@ -30,6 +30,8 @@ def argparser():
                     help='text encoding (default {})'.format(DEFAULT_ENCODING))
     ap.add_argument('-o', '--output', default=None,
                     help='aligned annotation (default STDOUT)')
+    ap.add_argument('-t', '--include-text', default=False, action='store_true',
+                    help='include text to align to in output')
     ap.add_argument('-v', '--verbose', default=False, action='store_true',
                     help='verbose output')
     ap.add_argument('ann', metavar='ANN', help='annotation')
@@ -707,9 +709,11 @@ def align_files(ann_file, old_file, new_file, options):
                         ann_file, old_file, new_file, options)
 
     if options.output is None:
+        print(new_text.rstrip('\n'), file=sys.stdout)
         write_annotations(annotations, sys.stdout)
     else:
         with open(options.output, 'wt', encoding=options.encoding) as out:
+            print(new_text.rstrip('\n'), file=out)
             write_annotations(annotations, out)
 
 
@@ -756,6 +760,9 @@ def align_dbs(ann_db_path, old_db_path, new_db_path, options):
 
                     annotations = align(annotations, old_text, new_text,
                                         ann_key, text_key, text_key, options)
+
+                    if options.include_text:
+                        out_db[text_key] = new_text
 
                     ann_str = '\n'.join(str(a) for a in annotations)
                     out_db[ann_key] = ann_str
