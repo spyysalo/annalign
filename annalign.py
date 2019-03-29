@@ -8,7 +8,7 @@ import diff_match_patch as dmp_module
 
 
 logging.basicConfig()
-logger = logging.getLogger(__file__)
+logger = logging.getLogger(os.path.basename(__file__))
 info, warning, error = logger.info, logger.warning, logger.error
 
 
@@ -18,10 +18,14 @@ DEL, EQ, INS, OP, TXT = -1, 0, 1, 0, 1   # diff-match-patch constants
 
 DEFAULT_ENCODING = 'utf-8'
 
+ANN_SUFFIX, TXT_SUFFIX = '.ann', '.txt'
+
 
 def argparser():
     from argparse import ArgumentParser
     ap = ArgumentParser()
+    ap.add_argument('-D', '--database', default=False, action='store_true',
+                    help='read and write SQLite DBs instead of files')
     ap.add_argument('-e', '--encoding', default=DEFAULT_ENCODING,
                     help='text encoding (default {})'.format(DEFAULT_ENCODING))
     ap.add_argument('-o', '--output', default=None,
@@ -326,7 +330,19 @@ def parse_ann_file(fn, options):
     with open(fn, 'r', encoding=options.encoding) as f:
         for ln, l in enumerate(f, start=1):
             l = l.rstrip('\n')
+            if not l or l.isspace():
+                continue
             annotations.append(parse_standoff_line(l, ln, fn))
+    return annotations
+
+
+def parse_ann_data(data, name, options):
+    annotations = []
+    for ln, l in enumerate(data.split('\n'), start=1):
+        l = l.rstrip('\n')
+        if not l or l.isspace():
+            continue
+        annotations.append(parse_standoff_line(l, ln, name))
     return annotations
 
 
@@ -697,16 +713,80 @@ def align_files(ann_file, old_file, new_file, options):
             write_annotations(annotations, out)
 
 
+def align_dbs(ann_db_path, old_db_path, new_db_path, options):
+    try:
+        from sqlitedict import SqliteDict
+    except ImportError:
+        error('failed `import sqlitedict`, try `pip3 install sqlitedict`')
+        raise
+
+    if ann_db_path != old_db_path:
+        raise NotImplementedError()    # TODO
+
+    if not os.path.exists(ann_db_path):
+        raise IOError('no such file: {}'.format(ann_db_path))
+
+    if not os.path.exists(new_db_path):
+        raise IOError('no such file: {}'.format(new_db_path))
+
+    insert_count = 0
+    with SqliteDict(ann_db_path, flag='r') as from_db:
+        with SqliteDict(new_db_path, flag='r') as to_db:
+            with SqliteDict(options.output, autocommit=False) as out_db:
+                for key, value in from_db.items():
+                    root, suffix = os.path.splitext(key)
+                    if suffix != ANN_SUFFIX:
+                        continue
+                    ann_key, ann_data = key, value
+                    text_key = root+TXT_SUFFIX
+
+                    old_text = from_db.get(text_key)
+                    if old_text is None:
+                        warning('{} not found in {}, skipping {}'.format(
+                            text_key, ann_db_path, key))
+                        continue
+
+                    new_text = to_db.get(text_key)
+                    if new_text is None:
+                        warning('{} not found in {}, skipping {}'.format(
+                            text_key, new_db_path, key))
+                        continue
+
+                    annotations = parse_ann_data(ann_data, ann_key, options)
+
+                    annotations = align(annotations, old_text, new_text,
+                                        ann_key, text_key, text_key, options)
+
+                    ann_str = '\n'.join(str(a) for a in annotations)
+                    out_db[ann_key] = ann_str
+
+                    insert_count += 1
+                    if insert_count % 1000 == 0:
+                        print('Inserted {}, committing...'.format(
+                            insert_count, end='', file=sys.stderr, flush=True))
+                        out_db.commit()
+                        print('done.', file=sys.stderr)
+                out_db.commit()
+
+
 def main(argv):
     args = argparser().parse_args(argv[1:])
+    if args.database and not args.output:
+        error('argument --output required with --database')
+        return 1
     if args.verbose:
         logger.setLevel(logging.INFO)
+
     try:
-        align_files(args.ann, args.oldtext, args.newtext, args)
+        if not args.database:
+            align_files(args.ann, args.oldtext, args.newtext, args)
+        else:
+            align_dbs(args.ann, args.oldtext, args.newtext, args)
     except Exception as e:
         error('failed {} {} {} {}'.format(
             __file__, args.ann, args.oldtext, args.newtext))
         raise
+
     return 0
 
 
