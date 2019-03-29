@@ -136,8 +136,13 @@ class Textbound(Annotation):
         if any(is_newline(c) for c in self.text):
             warning('newline in text: {}'.format(self.text))
         if self.text != self.orig_text:
-            warning('retext: change "{}" to "{}"'.format(self.orig_text,
-                                                         self.text))
+            if (self.text.replace(' ', '').lower() ==
+                self.orig_text.replace(' ', '').lower()):
+                log_func = info    # don't warn on space/case change
+            else:
+                log_func = warning
+            log_func('retext: change "{}" to "{}"'.format(
+                self.orig_text, self.text))
 
     def __unicode__(self):
         return "%s\t%s %s\t%s" % (self.id_, self.type_,
@@ -324,17 +329,26 @@ def parse_ann_file(fn, options):
 
 
 def is_word_start(offset, text):
-    if offset == 0:
-        return text[offset].isalnum()
+    # Accept alnum/non-alnum as well as any non-space/space (or doc
+    # start) as word boundary
+    if text[offset].isalnum():
+        return offset == 0 or not text[offset-1].isalnum()
+    elif not text[offset].isspace():
+        return offset == 0 or text[offset-1].isspace()
     else:
-        return text[offset].isalnum() and not text[offset-1].isalnum()
+        return False
 
 
 def is_word_end(offset, text):
-    if offset == 0 or not text[offset-1].isalnum():
+    # Analogous to is_word_start
+    if offset == 0:
         return False
+    elif text[offset-1].isalnum():
+        return offset == len(text) or not text[offset].isalnum()
+    elif not text[offset-1].isspace():
+        return offset == len(text) or text[offset].isspace()
     else:
-        return offset >= len(text) or not text[offset].isalnum()
+        return False
 
 
 class Remapper(object):
@@ -358,6 +372,10 @@ class Remapper(object):
         if not max_realign_distance:
             return new_start, new_end
 
+        # Don't attempt to modify zero-length annotations
+        if start == end or new_start == new_end:
+            return new_start, new_end
+
         # if span started/ended at word boundary before, try to
         # re-identify the boundary by extending the span.
         # TODO: consider checking if chars before/after span match
@@ -368,6 +386,14 @@ class Remapper(object):
             for i in range(max_realign_distance):
                 if new_start-i >= 0 and is_word_start(new_start-i, new_text):
                     re_start = new_start - i
+                    break
+        # Also, try to strip initial space if there wasn't any in the
+        # original
+        if not old_text[start].isspace() and new_text[new_start].isspace():
+            for i in range(1, max_realign_distance):
+                if (new_start+i < new_end and
+                    not new_text[new_start+i].isspace()):
+                    re_start = new_start + i
                     break
         if re_start is not None and re_start != new_start:
             warning('realign: "{}" to "{}" (original "{}")'.format(
@@ -380,6 +406,12 @@ class Remapper(object):
                 if new_end+i < len(new_text) and is_word_end(new_end+i,
                                                              new_text):
                     re_end = new_end + i
+                    break
+        if not old_text[end-1].isspace() and new_text[new_end-1].isspace():
+            for i in range(1, max_realign_distance):
+                if (new_end-1-i > new_start and
+                    not new_text[new_end-1-i].isspace()):
+                    re_end = new_end - i
                     break
         if re_end is not None and re_end != new_end:
             warning('realign: "{}" to "{}" (original "{}")'.format(
