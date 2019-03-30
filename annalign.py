@@ -380,12 +380,18 @@ class Remapper(object):
     def _remap(self, start, end):
         if start == end:
             return self.offset_map[start], self.offset_map[end]    # empty span
-        elif self.offset_map[start] == self.offset_map[end]:
-            # non-empty span maps to empty
+
+        new_start = self.offset_map[start]
+        new_end = min(self.offset_map[end-1]+1, len(self.new_text))
+        # new_end = self.offset_map[end]    # TODO better?
+
+        if (self.offset_map[start] == self.offset_map[end] or
+            new_start == new_end):
+            # previously non-empty span maps to empty
             raise SpanDeleted('{}:{} -> {}:{}'.format(
                 start, end, self.offset_map[start], self.offset_map[end]))
         else:
-            return self.offset_map[start], self.offset_map[end - 1] + 1
+            return new_start, new_end
 
     def remap(self, start, end, max_realign_distance=10):
         new_start, new_end = self._remap(start, end)
@@ -680,6 +686,7 @@ def align(annotations, old_text, new_text, ann_name, old_name, new_name,
     assert len(offset_map) == len(old_text), 'internal error: {} {}'.format(len(offset_map), len(old_text))
 
     mapper = Remapper(old_text, new_text, offset_map)
+    aligned_annotations = []
     for a in annotations:
         try:
             a.remap(mapper)
@@ -688,8 +695,9 @@ def align(annotations, old_text, new_text, ann_name, old_name, new_name,
             continue
         a.fragment(new_text)
         a.retext(new_text)
+        aligned_annotations.append(a)
 
-    return annotations
+    return aligned_annotations
 
 
 def write_annotations(annotations, out):
@@ -758,8 +766,14 @@ def align_dbs(ann_db_path, old_db_path, new_db_path, options):
 
                     annotations = parse_ann_data(ann_data, ann_key, options)
 
-                    annotations = align(annotations, old_text, new_text,
-                                        ann_key, text_key, text_key, options)
+                    try:
+                        annotations = align(
+                            annotations, old_text, new_text, ann_key,
+                            text_key, text_key, options)
+                    except Exception as e:
+                        error('FAILED TO ALIGN {}: {}({})'.format(
+                            ann_key, type(e).__name__, e))
+                        continue
 
                     if options.include_text:
                         out_db[text_key] = new_text
