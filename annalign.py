@@ -2,7 +2,10 @@
 
 import sys
 import os
+import re
 import logging
+
+from collections import Counter
 
 import diff_match_patch as dmp_module
 
@@ -20,6 +23,12 @@ DEFAULT_ENCODING = 'utf-8'
 
 ANN_SUFFIX, TXT_SUFFIX = '.ann', '.txt'
 
+MAX_NOT_FOUND_WARNINGS = 100    # noise reduction
+
+MAX_DIFFERENCE_LOG = 1    # max count (noise reduction)
+
+NON_ALNUM_RE = re.compile('[\W_]+', re.UNICODE)
+
 
 def argparser():
     from argparse import ArgumentParser
@@ -28,6 +37,8 @@ def argparser():
                     help='read and write SQLite DBs instead of files')
     ap.add_argument('-e', '--encoding', default=DEFAULT_ENCODING,
                     help='text encoding (default {})'.format(DEFAULT_ENCODING))
+    ap.add_argument('-l', '--limit', default=None, type=int,
+                    help='limit maximum number of documents')
     ap.add_argument('-o', '--output', default=None,
                     help='aligned annotation (default STDOUT)')
     ap.add_argument('-t', '--include-text', default=False, action='store_true',
@@ -55,6 +66,10 @@ class Annotation(object):
     def __init__(self, id_, type_):
         self.id_ = id_
         self.type_ = type_
+
+    def depends_on(self):
+        # assume none
+        return []
 
     def remap(self, _):
         # assume not text-bound: no-op
@@ -87,6 +102,32 @@ def is_newline(c):
         '\u2028',    # LINE SEPARATOR
         '\u2029'     # PARAGRAPH SEPARATOR
     )
+
+
+def alnum_difference(old, new):
+    """Return True iff alphanumeric parts of string differ"""
+    if old == new:
+        return False    # short-circuit
+    old_alnum = NON_ALNUM_RE.sub('', old)
+    new_alnum = NON_ALNUM_RE.sub('', new)
+    return old_alnum != new_alnum
+
+
+def log_difference(source, old, new):
+    log_difference.count[(old, new)] += 1
+    count = log_difference.count[(old, new)]
+    if count > MAX_DIFFERENCE_LOG:
+        return    # logged often enough already
+    if alnum_difference(old.lower(), new.lower()):
+        log_func = warning
+    else:
+        log_func = info    # don't warn on non-alnum / case change
+    if count == MAX_DIFFERENCE_LOG:
+        note = '[suppressing further repeats]'
+    else:
+        note = '(repeat {})'.format(count)
+    log_func('{}: change "{}" to "{}" {}'.format(source, old, new, note))
+log_difference.count = Counter()
 
 
 class Textbound(Annotation):
@@ -144,13 +185,7 @@ class Textbound(Annotation):
         if any(is_newline(c) for c in self.text):
             warning('newline in text: {}'.format(self.text))
         if self.text != self.orig_text:
-            if (self.text.replace(' ', '').lower() ==
-                self.orig_text.replace(' ', '').lower()):
-                log_func = info    # don't warn on space/case change
-            else:
-                log_func = warning
-            log_func('retext: change "{}" to "{}"'.format(
-                self.orig_text, self.text))
+            log_difference('retext', self.orig_text, self.text)
 
     def __unicode__(self):
         return "%s\t%s %s\t%s" % (self.id_, self.type_,
@@ -183,6 +218,9 @@ class ArgAnnotation(Annotation):
         Annotation.__init__(self, id_, type_)
         self.args = args
 
+    def depends_on(self):
+        raise NotImplementedError    # TODO: return IDs for args
+
 
 class Relation(ArgAnnotation):
     def __init__(self, id_, type_, args):
@@ -197,6 +235,9 @@ class Event(ArgAnnotation):
         ArgAnnotation.__init__(self, id_, type_, args)
         self.trigger = trigger
 
+    def depends_on(self):
+        return ArgAnnotation.depends_on(self) + [self.trigger]
+
     def __str__(self):
         return "%s\t%s:%s %s" % (self.id_, self.type_, self.trigger,
                                  ' '.join(self.args))
@@ -207,6 +248,9 @@ class Attribute(Annotation):
         Annotation.__init__(self, id_, type_)
         self.target = target
         self.value = value
+
+    def depends_on(self):
+        return [self.target]
 
     def __str__(self):
         return "%s\t%s %s%s" % (self.id_, self.type_, self.target,
@@ -220,6 +264,9 @@ class Normalization(Annotation):
         self.ref = ref
         self.reftext = reftext
 
+    def depends_on(self):
+        return [self.target]
+
     def __str__(self):
         return "%s\t%s %s %s\t%s" % (self.id_, self.type_, self.target,
                                      self.ref, self.reftext)
@@ -230,6 +277,9 @@ class Equiv(Annotation):
         Annotation.__init__(self, id_, type_)
         self.targets = targets
 
+    def depends_on(self):
+        return self.targets
+
     def __str__(self):
         return "%s\t%s %s" % (self.id_, self.type_, ' '.join(self.targets))
 
@@ -239,6 +289,9 @@ class Note(Annotation):
         Annotation.__init__(self, id_, type_)
         self.target = target
         self.text = text
+
+    def depends_on(self):
+        return [self.target]
 
     def __str__(self):
         return "%s\t%s %s\t%s" % (self.id_, self.type_, self.target, self.text)
@@ -413,8 +466,8 @@ class Remapper(object):
                 if new_start-i >= 0 and is_word_start(new_start-i, new_text):
                     re_start = new_start - i
                     break
-        # Also, try to strip initial space if there wasn't any in the
-        # original
+        # Alternatively, try to strip initial space if there wasn't
+        # any in the original
         if not old_text[start].isspace() and new_text[new_start].isspace():
             for i in range(1, max_realign_distance):
                 if (new_start+i < new_end and
@@ -422,9 +475,8 @@ class Remapper(object):
                     re_start = new_start + i
                     break
         if re_start is not None and re_start != new_start:
-            warning('realign: "{}" to "{}" (original "{}")'.format(
-                new_text[new_start:new_end], new_text[re_start:new_end],
-                old_span_text))
+            log_difference('realign', new_text[new_start:new_end],
+                           new_text[re_start:new_end])
             new_start = re_start
         re_end = None
         if is_word_end(end, self.old_text):
@@ -440,9 +492,8 @@ class Remapper(object):
                     re_end = new_end - i
                     break
         if re_end is not None and re_end != new_end:
-            warning('realign: "{}" to "{}" (original "{}")'.format(
-                new_text[new_start:new_end], new_text[new_start:re_end],
-                old_span_text))
+            log_difference('realign', new_text[new_start:new_end],
+                           new_text[new_start:re_end])
             new_end = re_end
         return new_start, new_end
 
@@ -686,16 +737,33 @@ def align(annotations, old_text, new_text, ann_name, old_name, new_name,
     assert len(offset_map) == len(old_text), 'internal error: {} {}'.format(len(offset_map), len(old_text))
 
     mapper = Remapper(old_text, new_text, offset_map)
-    aligned_annotations = []
+    aligned_annotations, deleted_annotations = [], []
     for a in annotations:
         try:
             a.remap(mapper)
         except SpanDeleted:
             warning('annotation deleted from {}: {}'.format(ann_name, a))
+            deleted_annotations.append(a)
             continue
         a.fragment(new_text)
         a.retext(new_text)
         aligned_annotations.append(a)
+
+    # Delete any annotation that depends on a deleted annotation, and repeat
+    # until there is no further change
+    deleted, cascaded = set([a.id_ for a in deleted_annotations]), False
+    while True:
+        cascaded = False
+        if not deleted:
+            break
+        for a in aligned_annotations:
+            if any(i for i in a.depends_on() if i in deleted):
+                warning('cascading delete from {}: {}'.format(ann_name, a))
+                deleted.add(a.id_)
+                cascaded = True
+        if not cascaded:
+            break
+        aligned_annotations = [a for a in aligned_annotations if a.id_ not in deleted]
 
     return aligned_annotations
 
@@ -741,6 +809,16 @@ def align_dbs(ann_db_path, old_db_path, new_db_path, options):
     if not os.path.exists(new_db_path):
         raise IOError('no such file: {}'.format(new_db_path))
 
+    not_found_count = 0
+    def document_not_found(key, db):
+        nonlocal not_found_count
+        if not_found_count < MAX_NOT_FOUND_WARNINGS:
+            warning('{} not found in {}'.format(key, db))
+        not_found_count += 1
+        if not_found_count == MAX_NOT_FOUND_WARNINGS:
+            warning('{} documents not found, suppressing further warnings'.\
+                    format(MAX_NOT_FOUND_WARNINGS))
+
     insert_count = 0
     with SqliteDict(ann_db_path, flag='r') as from_db:
         with SqliteDict(new_db_path, flag='r') as to_db:
@@ -754,14 +832,12 @@ def align_dbs(ann_db_path, old_db_path, new_db_path, options):
 
                     old_text = from_db.get(text_key)
                     if old_text is None:
-                        warning('{} not found in {}, skipping {}'.format(
-                            text_key, ann_db_path, key))
+                        document_not_found(text_key, ann_db_path)
                         continue
 
                     new_text = to_db.get(text_key)
                     if new_text is None:
-                        warning('{} not found in {}, skipping {}'.format(
-                            text_key, new_db_path, key))
+                        document_not_found(text_key, new_db_path)
                         continue
 
                     annotations = parse_ann_data(ann_data, ann_key, options)
@@ -787,7 +863,17 @@ def align_dbs(ann_db_path, old_db_path, new_db_path, options):
                             insert_count, end='', file=sys.stderr, flush=True))
                         out_db.commit()
                         print('done.', file=sys.stderr)
+
+                    if (options.limit is not None and
+                        insert_count >= options.limit):
+                        print('Reached limit {}, stopping.'.\
+                              format(options.limit), file=sys.stderr)
+                        break
+
                 out_db.commit()
+
+    if not_found_count > 0:
+        warning('{} documents not found in total'.format(not_found_count))
 
 
 def main(argv):
