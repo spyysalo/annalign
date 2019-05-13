@@ -27,12 +27,20 @@ MAX_NOT_FOUND_WARNINGS = 100    # noise reduction
 
 MAX_DIFFERENCE_LOG = 1    # max count (noise reduction)
 
+DISTANCE_WARN_THRESHOLD = 0.1
+
 NON_ALNUM_RE = re.compile('[\W_]+', re.UNICODE)
+
+
+class DistanceError(Exception):
+    pass
 
 
 def argparser():
     from argparse import ArgumentParser
     ap = ArgumentParser()
+    ap.add_argument('-d', '--max-distance', default=None, type=float,
+                    help='max relative Levenshtein distance')
     ap.add_argument('-D', '--database', default=False, action='store_true',
                     help='read and write SQLite DBs instead of files')
     ap.add_argument('-e', '--encoding', default=DEFAULT_ENCODING,
@@ -726,12 +734,24 @@ def align(annotations, old_text, new_text, ann_name, old_name, new_name,
           options):
     diff = diff_ignorespace(old_text, new_text)
 
-    # verbose diagnostic output
     distance = dmp.diff_levenshtein(diff)
-    info('{} <> {} distance {} (lengts {}, {})'.format(
-        old_name, new_name, distance, len(old_text), len(new_text)))
-    for a in alignment_strings(diff):
-        info('alignment:\n{}'.format(a))
+    min_len = min(len(old_text), len(new_text))
+    relative_distance = distance / min_len
+    if (options.max_distance is not None and
+        relative_distance > options.max_distance):
+        raise DistanceError('{} ({}/{})'.format(
+            relative_distance, distance, min_len))
+    elif relative_distance > DISTANCE_WARN_THRESHOLD:
+        warning('relative Levenshtein distance {} ({}/{}) for {} <> {}'.\
+                format(relative_distance, distance, min_len,
+                       old_name, new_name))
+
+    if options.verbose:
+        # diagnostic output
+        info('{} <> {} distance {} (lengts {}, {})'.format(
+            old_name, new_name, distance, len(old_text), len(new_text)))
+        for a in alignment_strings(diff):
+            info('alignment:\n{}'.format(a))
 
     offset_map = diff_to_offset_map(diff)
     assert len(offset_map) == len(old_text), 'internal error: {} {}'.format(len(offset_map), len(old_text))
@@ -846,6 +866,10 @@ def align_dbs(ann_db_path, old_db_path, new_db_path, options):
                         annotations = align(
                             annotations, old_text, new_text, ann_key,
                             text_key, text_key, options)
+                    except DistanceError as e:
+                        warning('skip {}: max-distance exceeded ({})'.\
+                                format(ann_key, e))
+                        continue
                     except Exception as e:
                         error('FAILED TO ALIGN {}: {}({})'.format(
                             ann_key, type(e).__name__, e))
