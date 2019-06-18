@@ -54,6 +54,8 @@ def argparser():
                     help='aligned annotation (default STDOUT)')
     ap.add_argument('-t', '--include-text', default=False, action='store_true',
                     help='include text to align to in output')
+    ap.add_argument('-T', '--diff-timeout', default=0, type=float,
+                    help='max seconds to diff before giving up')
     ap.add_argument('-v', '--verbose', default=False, action='store_true',
                     help='verbose output')
     ap.add_argument('ann', metavar='ANN', help='annotation')
@@ -816,11 +818,13 @@ def align_files(ann_file, old_file, new_file, options):
                         ann_file, old_file, new_file, options)
 
     if options.output is None:
-        print(new_text.rstrip('\n'), file=sys.stdout)
+        if options.include_text:
+            print(new_text.rstrip('\n'), file=sys.stdout)
         write_annotations(annotations, sys.stdout)
     else:
         with open(options.output, 'wt', encoding=options.encoding) as out:
-            print(new_text.rstrip('\n'), file=out)
+            if options.include_text:
+                print(new_text.rstrip('\n'), file=out)
             write_annotations(annotations, out)
 
 
@@ -918,6 +922,7 @@ def main(argv):
         return 1
     if args.verbose:
         logger.setLevel(logging.INFO)
+    dmp.Diff_Timeout = args.diff_timeout
 
     try:
         if not args.database:
