@@ -45,6 +45,9 @@ def argparser():
                     help='read and write SQLite DBs instead of files')
     ap.add_argument('-e', '--encoding', default=DEFAULT_ENCODING,
                     help='text encoding (default {})'.format(DEFAULT_ENCODING))
+    ap.add_argument('-i', '--ignore-errors', default=False,
+                    action='store_true',
+                    help='ignore format errors')
     ap.add_argument('-l', '--limit', default=None, type=int,
                     help='limit maximum number of documents')
     ap.add_argument('-o', '--output', default=None,
@@ -381,11 +384,15 @@ parse_standoff_func = {
 }
 
 
-def parse_standoff_line(l, ln, fn):
+def parse_standoff_line(l, ln, fn, options):
     try:
         return parse_standoff_func[l[0]](l.split('\t'))
     except Exception:
-        raise FormatError("error on line {} in {}: {}".format(ln, fn, l))
+        if options.ignore_errors:
+            error('failed to parse line {} in {}: {}'.format(ln, fn, l))
+            return None
+        else:
+            raise FormatError('error on line {} in {}: {}'.format(ln, fn, l))
 
 
 def parse_ann_file(fn, options):
@@ -395,7 +402,9 @@ def parse_ann_file(fn, options):
             l = l.rstrip('\n')
             if not l or l.isspace():
                 continue
-            annotations.append(parse_standoff_line(l, ln, fn))
+            ann = parse_standoff_line(l, ln, fn, options)
+            if ann is not None:
+                annotations.append(ann)
     return annotations
 
 
@@ -405,7 +414,9 @@ def parse_ann_data(data, name, options):
         l = l.rstrip('\n')
         if not l or l.isspace():
             continue
-        annotations.append(parse_standoff_line(l, ln, name))
+        ann = parse_standoff_line(l, ln, name, options)
+        if ann is not None:
+            annotations.append(ann)
     return annotations
 
 
