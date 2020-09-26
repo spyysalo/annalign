@@ -355,7 +355,11 @@ def parse_attribute(fields):
 
 
 def parse_normalization(fields):
-    id_, type_target_ref, reftext = fields
+    if len(fields) == 3:
+        id_, type_target_ref, reftext = fields
+    elif len(fields) == 2:    # Allow missing reference text
+        id_, type_target_ref = fields
+        reftext = ''
     type_, target, ref = type_target_ref.split(' ')
     return Normalization(id_, type_, target, ref, reftext)
 
